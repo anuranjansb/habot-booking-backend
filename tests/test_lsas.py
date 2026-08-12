@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-
 from app.extensions import db
 from app.models import LSAProfile
 
@@ -51,11 +50,12 @@ def create_parent(app):
     return parent.id
 
 
-def test_search_lsa_by_skill(client, app):
+def test_search_lsa_by_skill(client, app, auth_headers):
     create_lsa_data(app)
 
     response = client.get(
-        "/api/v1/lsas/search/?skill=ADHD"
+        "/api/v1/lsas/search/?skill=ADHD",
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
@@ -67,11 +67,12 @@ def test_search_lsa_by_skill(client, app):
     assert "ADHD" in data[0]["skills"]
 
 
-def test_inactive_lsa_not_returned(client, app):
+def test_inactive_lsa_not_returned(client, app, auth_headers):
     create_lsa_data(app)
 
     response = client.get(
-        "/api/v1/lsas/search/"
+        "/api/v1/lsas/search/",
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
@@ -82,7 +83,11 @@ def test_inactive_lsa_not_returned(client, app):
     assert "Inactive LSA" not in names
 
 
-def test_unavailable_lsa_not_returned(client, app):
+def test_unavailable_lsa_not_returned(
+    client,
+    app,
+    auth_headers,
+):
     create_lsa_data(app)
 
     with app.app_context():
@@ -123,35 +128,36 @@ def test_unavailable_lsa_not_returned(client, app):
         "/api/v1/lsas/search/"
         "?skill=ADHD"
         "&start_time=2026-08-15T10:30:00Z"
-        "&end_time=2026-08-15T11:30:00Z"
+        "&end_time=2026-08-15T11:30:00Z",
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
     assert response.json == []
 
 
-def test_create_booking_inactive_lsa(client, app):
+def test_create_booking_inactive_lsa(
+    client,
+    app,
+    auth_user,
+):
     from app.extensions import db
-    from app.models import LSAProfile, Parent
+    from app.models import LSAProfile
+
+    parent_id = auth_user["parent_id"]
+    headers = auth_user["headers"]
 
     with app.app_context():
-        parent = Parent(
-            name="Test Parent",
-            email="parent@test.com",
-        )
-
         lsa = LSAProfile(
             name="Inactive LSA",
-            email="inactive@test.com",
+            email="inactive-lsa@test.com",
             skills=["ADHD"],
             is_active=False,
         )
 
-        db.session.add(parent)
         db.session.add(lsa)
         db.session.commit()
 
-        parent_id = parent.id
         lsa_id = lsa.id
 
     response = client.post(
@@ -162,7 +168,161 @@ def test_create_booking_inactive_lsa(client, app):
             "start_time": "2026-08-15T10:00:00+00:00",
             "end_time": "2026-08-15T11:00:00+00:00",
         },
+        headers=headers,
     )
 
     assert response.status_code == 400
     assert response.json["error"] == "LSA is not active"
+
+
+def test_search_lsas_requires_auth(client):
+    response = client.get(
+        "/api/v1/lsas/search/"
+    )
+
+    assert response.status_code == 401
+
+
+def test_lsa_role_cannot_search_lsas(client, app):
+    from flask_jwt_extended import create_access_token
+
+    with app.app_context():
+        token = create_access_token(
+            identity="999",
+            additional_claims={
+                "role": "lsa",
+            },
+        )
+
+    response = client.get(
+        "/api/v1/lsas/search/",
+        headers={
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json["error"] == "Forbidden"
+
+
+def test_lsa_role_cannot_create_booking(client, app):
+    from flask_jwt_extended import create_access_token
+
+    with app.app_context():
+        token = create_access_token(
+            identity="999",
+            additional_claims={
+                "role": "lsa",
+            },
+        )
+
+    response = client.post(
+        "/api/v1/bookings/",
+        json={
+            "parent_id": 1,
+            "lsa_id": 1,
+            "start_time": "2026-08-15T10:00:00+00:00",
+            "end_time": "2026-08-15T11:00:00+00:00",
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json["error"] == "Forbidden"
+
+
+def test_search_lsa_empty_skill(client):
+    response = client.get(
+        "/api/v1/lsas/search/?skill="
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == "skill must not be empty"
+
+
+def test_search_lsa_empty_skill(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/?skill=",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == "skill must not be empty"
+
+
+def test_search_lsa_whitespace_skill(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/?skill=%20%20%20",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == "skill must not be empty"
+
+
+def test_search_lsa_missing_end_time(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/"
+        "?start_time=2026-08-15T10:00:00Z",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "start_time and end_time must be provided together"
+    )
+
+
+def test_search_lsa_missing_start_time(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/"
+        "?end_time=2026-08-15T11:00:00Z",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "start_time and end_time must be provided together"
+    )
+
+
+def test_search_lsa_invalid_datetime(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/"
+        "?start_time=invalid"
+        "&end_time=2026-08-15T11:00:00Z",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == "Invalid datetime format"
+
+
+def test_search_lsa_without_timezone(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/"
+        "?start_time=2026-08-15T10:00:00"
+        "&end_time=2026-08-15T11:00:00",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "Datetime must include timezone information"
+    )
+
+
+def test_search_lsa_end_before_start(client, auth_headers):
+    response = client.get(
+        "/api/v1/lsas/search/"
+        "?start_time=2026-08-15T11:00:00Z"
+        "&end_time=2026-08-15T10:00:00Z",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "end_time must be after start_time"
+    )

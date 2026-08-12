@@ -2,10 +2,10 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import select
-
+from flask_jwt_extended import jwt_required
 from app.extensions import db
 from app.models import BookingRequest, BookingStatus, LSAProfile
-
+from app.auth import role_required
 
 lsas_bp = Blueprint(
     "lsas",
@@ -15,8 +15,17 @@ lsas_bp = Blueprint(
 
 
 @lsas_bp.get("/search/")
+@jwt_required()
+@role_required("parent")
 def search_lsas():
     skill = request.args.get("skill")
+    if skill is not None:
+        skill = skill.strip()
+
+        if not skill:
+            return jsonify({
+                "error": "skill must not be empty"
+            }), 400
     start_time_str = request.args.get("start_time")
     end_time_str = request.args.get("end_time")
 
@@ -29,10 +38,19 @@ def search_lsas():
             LSAProfile.skills.any(skill)
         )
 
+    if start_time_str is not None:
+        start_time_str = start_time_str.strip()
+
+    if end_time_str is not None:
+        end_time_str = end_time_str.strip()
+
     if start_time_str or end_time_str:
         if not start_time_str or not end_time_str:
             return jsonify({
-                "error": "start_time and end_time must be provided together"
+                "error": (
+                    "start_time and end_time "
+                    "must be provided together"
+                )
             }), 400
 
         try:

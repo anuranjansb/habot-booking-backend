@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import (
+    generate_password_hash,
+    check_password_hash,
+)
 
 from app.extensions import db
 
@@ -41,6 +44,12 @@ class User(db.Model):
         db.DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+
+    parent = db.relationship(
+        "Parent",
+        back_populates="user",
+        uselist=False,
     )
 
     def set_password(self, password):

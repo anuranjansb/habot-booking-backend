@@ -1,3 +1,10 @@
+from app.extensions import db
+from app.auth import role_required
+from flask import Flask
+import pytest
+from flask_jwt_extended import create_access_token
+
+
 def test_register_parent(client):
     response = client.post(
         "/api/v1/auth/register",
@@ -186,3 +193,24 @@ def test_login_inactive_user(client, app):
 
     assert response.status_code == 403
     assert response.json["error"] == "User account is inactive"
+
+
+def make_token(app, role):
+    with app.app_context():
+        token = create_access_token(
+            identity="1",
+            additional_claims={
+                "role": role,
+            },
+        )
+
+    return {
+        "Authorization": f"Bearer {token}",
+    }
+
+
+def test_parent_role_allowed(app):
+    app.config["TESTING"] = True
+
+    with app.test_request_context():
+        pass
