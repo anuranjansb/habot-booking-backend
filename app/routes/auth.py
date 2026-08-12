@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-
+from flask_jwt_extended import create_access_token
 from app.extensions import db
 from app.models import User
 
@@ -83,3 +83,49 @@ def register():
         "role": user.role,
         "is_active": user.is_active,
     }), 201
+
+
+@auth_bp.post("/login")
+def login():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({
+            "error": "Request body is required"
+        }), 400
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({
+            "error": "Email and password are required"
+        }), 400
+
+    email = email.strip().lower()
+
+    user = User.query.filter_by(
+        email=email
+    ).first()
+
+    if not user or not user.check_password(password):
+        return jsonify({
+            "error": "Invalid email or password"
+        }), 401
+
+    if not user.is_active:
+        return jsonify({
+            "error": "User account is inactive"
+        }), 403
+
+    access_token = create_access_token(
+        identity=str(user.id),
+        additional_claims={
+            "role": user.role,
+        },
+    )
+
+    return jsonify({
+        "access_token": access_token,
+        "token_type": "Bearer",
+    }), 200

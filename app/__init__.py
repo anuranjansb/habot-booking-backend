@@ -5,6 +5,7 @@ from flask import Flask
 from app.routes.auth import auth_bp
 from app.extensions import db, migrate
 from flask_swagger_ui import get_swaggerui_blueprint
+from flask_jwt_extended import JWTManager
 
 load_dotenv()
 
@@ -22,7 +23,12 @@ def create_app(test_config=None):
             f"{os.getenv('POSTGRES_PORT')}/"
             f"{os.getenv('POSTGRES_DB')}"
         )
+    app.config["JWT_SECRET_KEY"] = os.getenv(
+        "JWT_SECRET_KEY",
+        "dev-secret-change-this",
+    )
 
+    jwt = JWTManager(app)
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
