@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from flask import Flask
-
+from app.routes.auth import auth_bp
 from app.extensions import db, migrate
 from flask_swagger_ui import get_swaggerui_blueprint
 
@@ -55,6 +55,7 @@ def create_app(test_config=None):
         LSAProfile,
         Parent,
         PaymentEvent,
+        User,
     )
 
     from app.routes.bookings import bookings_bp
@@ -73,4 +74,5 @@ def create_app(test_config=None):
     )
 
     app.register_blueprint(swaggerui_blueprint)
+    app.register_blueprint(auth_bp)
     return app
