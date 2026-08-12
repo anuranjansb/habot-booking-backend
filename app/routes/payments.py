@@ -4,7 +4,11 @@ from app.extensions import db
 from app.models import (
     BookingRequest,
     BookingStatus,
-    PaymentEvent
+    PaymentEvent,
+)
+from app.services.payment_service import (
+    PaymentGatewayError,
+    verify_payment,
 )
 
 
@@ -30,7 +34,9 @@ def payment_webhook():
 
     if not event_id or not booking_id or not payment_status:
         return jsonify({
-            "error": "event_id, booking_id and status are required"
+            "error": (
+                "event_id, booking_id and status are required"
+            )
         }), 400
 
     if payment_status not in {"success", "failed"}:
@@ -38,7 +44,7 @@ def payment_webhook():
             "error": "Invalid payment status"
         }), 400
 
-    # Check whether this payment event was already processed
+    # Idempotency check
     existing_event = PaymentEvent.query.filter_by(
         event_id=event_id
     ).first()
@@ -65,6 +71,24 @@ def payment_webhook():
             "error": "Booking is not pending"
         }), 409
 
+    # Verify payment with the mock external payment gateway.
+    try:
+        verified = verify_payment(
+            event_id=event_id,
+            booking_id=booking_id,
+            payment_status=payment_status,
+        )
+
+    except PaymentGatewayError as error:
+        return jsonify({
+            "error": str(error)
+        }), 502
+
+    if not verified:
+        return jsonify({
+            "error": "Payment verification failed"
+        }), 400
+
     if payment_status == "success":
         booking.status = BookingStatus.CONFIRMED
     else:
@@ -80,6 +104,7 @@ def payment_webhook():
 
     try:
         db.session.commit()
+
     except Exception:
         db.session.rollback()
         raise

@@ -1,4 +1,7 @@
 from datetime import datetime, timezone
+from unittest.mock import patch
+
+import requests
 
 from app.extensions import db
 from app.models import (
@@ -55,7 +58,21 @@ def create_pending_booking(app):
         return booking.id
 
 
-def test_payment_success_confirms_booking(client, app):
+def mock_successful_gateway(mock_post):
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {
+        "verified": True,
+    }
+
+
+@patch("app.services.payment_service.requests.post")
+def test_payment_success_confirms_booking(
+    mock_post,
+    client,
+    app,
+):
+    mock_successful_gateway(mock_post)
+
     booking_id = create_pending_booking(app)
 
     response = client.post(
@@ -71,6 +88,8 @@ def test_payment_success_confirms_booking(client, app):
     assert response.json["booking_id"] == booking_id
     assert response.json["status"] == "confirmed"
 
+    mock_post.assert_called_once()
+
     with app.app_context():
         booking = db.session.get(
             BookingRequest,
@@ -80,7 +99,14 @@ def test_payment_success_confirms_booking(client, app):
         assert booking.status == BookingStatus.CONFIRMED
 
 
-def test_payment_failure_fails_booking(client, app):
+@patch("app.services.payment_service.requests.post")
+def test_payment_failure_fails_booking(
+    mock_post,
+    client,
+    app,
+):
+    mock_successful_gateway(mock_post)
+
     booking_id = create_pending_booking(app)
 
     response = client.post(
@@ -96,6 +122,8 @@ def test_payment_failure_fails_booking(client, app):
     assert response.json["booking_id"] == booking_id
     assert response.json["status"] == "failed"
 
+    mock_post.assert_called_once()
+
     with app.app_context():
         booking = db.session.get(
             BookingRequest,
@@ -105,7 +133,14 @@ def test_payment_failure_fails_booking(client, app):
         assert booking.status == BookingStatus.FAILED
 
 
-def test_duplicate_payment_event_is_idempotent(client, app):
+@patch("app.services.payment_service.requests.post")
+def test_duplicate_payment_event_is_idempotent(
+    mock_post,
+    client,
+    app,
+):
+    mock_successful_gateway(mock_post)
+
     booking_id = create_pending_booking(app)
 
     payload = {
@@ -132,8 +167,14 @@ def test_duplicate_payment_event_is_idempotent(client, app):
     assert second_response.json["status"] == "confirmed"
     assert second_response.json["message"] == "Event already processed"
 
+    # The external service should only be called once.
+    mock_post.assert_called_once()
 
-def test_invalid_payment_status_returns_400(client, app):
+
+def test_invalid_payment_status_returns_400(
+    client,
+    app,
+):
     booking_id = create_pending_booking(app)
 
     response = client.post(
@@ -163,7 +204,14 @@ def test_payment_for_missing_booking_returns_404(client):
     assert response.json["error"] == "Booking not found"
 
 
-def test_payment_for_already_confirmed_booking_returns_409(client, app):
+@patch("app.services.payment_service.requests.post")
+def test_payment_for_already_confirmed_booking_returns_409(
+    mock_post,
+    client,
+    app,
+):
+    mock_successful_gateway(mock_post)
+
     booking_id = create_pending_booking(app)
 
     first_response = client.post(
@@ -188,3 +236,112 @@ def test_payment_for_already_confirmed_booking_returns_409(client, app):
 
     assert second_response.status_code == 409
     assert second_response.json["error"] == "Booking is not pending"
+
+    mock_post.assert_called_once()
+
+
+@patch("app.services.payment_service.requests.post")
+def test_payment_gateway_failure_returns_502(
+    mock_post,
+    client,
+    app,
+):
+    mock_post.side_effect = requests.RequestException(
+        "Payment gateway unavailable"
+    )
+
+    booking_id = create_pending_booking(app)
+
+    response = client.post(
+        "/api/v1/payments/webhook",
+        json={
+            "event_id": "evt_gateway_failure_001",
+            "booking_id": booking_id,
+            "status": "success",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json["error"] == (
+        "Payment gateway unavailable"
+    )
+
+    with app.app_context():
+        booking = db.session.get(
+            BookingRequest,
+            booking_id,
+        )
+
+        assert booking.status == BookingStatus.PENDING
+
+
+@patch("app.services.payment_service.requests.post")
+def test_payment_gateway_verification_failure_returns_400(
+    mock_post,
+    client,
+    app,
+):
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {
+        "verified": False,
+    }
+
+    booking_id = create_pending_booking(app)
+
+    response = client.post(
+        "/api/v1/payments/webhook",
+        json={
+            "event_id": "evt_verification_failure_001",
+            "booking_id": booking_id,
+            "status": "success",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json["error"] == (
+        "Payment verification failed"
+    )
+
+    with app.app_context():
+        booking = db.session.get(
+            BookingRequest,
+            booking_id,
+        )
+
+        assert booking.status == BookingStatus.PENDING
+
+
+@patch("app.services.payment_service.requests.post")
+def test_payment_gateway_invalid_response_returns_502(
+    mock_post,
+    client,
+    app,
+):
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.side_effect = ValueError(
+        "Invalid JSON"
+    )
+
+    booking_id = create_pending_booking(app)
+
+    response = client.post(
+        "/api/v1/payments/webhook",
+        json={
+            "event_id": "evt_invalid_gateway_response_001",
+            "booking_id": booking_id,
+            "status": "success",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json["error"] == (
+        "Invalid payment gateway response"
+    )
+
+    with app.app_context():
+        booking = db.session.get(
+            BookingRequest,
+            booking_id,
+        )
+
+        assert booking.status == BookingStatus.PENDING
