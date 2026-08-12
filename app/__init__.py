@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from flask import Flask
 
 from app.extensions import db, migrate
+from flask_swagger_ui import get_swaggerui_blueprint
 
 load_dotenv()
 
@@ -63,5 +64,13 @@ def create_app(test_config=None):
     app.register_blueprint(payments_bp)
     app.register_blueprint(lsas_bp)
     app.register_blueprint(bookings_bp)
+    swaggerui_blueprint = get_swaggerui_blueprint(
+        "/docs",
+        "/static/openapi.yaml",
+        config={
+            "app_name": "HABOT Booking API",
+        },
+    )
 
+    app.register_blueprint(swaggerui_blueprint)
     return app

@@ -1,0 +1,273 @@
+openapi: 3.0.3
+
+info:
+  title: HABOT Booking API
+  description: |
+    REST API for managing LSA bookings and payment webhooks.
+
+    The API provides:
+    - LSA availability search
+    - Booking creation and retrieval
+    - Payment webhook processing
+    - Idempotent payment event handling
+    - Database-level protection against overlapping bookings
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+
+tags:
+  - name: Bookings
+    description: Booking operations
+  - name: LSAs
+    description: Learning Support Assistant operations
+  - name: Payments
+    description: Payment webhook operations
+
+paths:
+
+  /api/v1/bookings/:
+    post:
+      tags:
+        - Bookings
+      summary: Create a booking
+      description: |
+        Creates a pending booking for an active LSA.
+
+        The requested time interval must not overlap another pending
+        or confirmed booking for the same LSA.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookingRequest'
+            example:
+              parent_id: 1
+              lsa_id: 1
+              start_time: "2026-08-15T10:00:00+00:00"
+              end_time: "2026-08-15T11:00:00+00:00"
+
+      responses:
+        '201':
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+        '400':
+          description: Invalid request
+
+        '404':
+          description: Parent or LSA not found
+
+        '409':
+          description: LSA is already booked for the requested time
+
+  /api/v1/bookings/{booking_id}:
+    get:
+      tags:
+        - Bookings
+      summary: Get a booking
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 1
+
+      responses:
+        '200':
+          description: Booking found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+
+        '404':
+          description: Booking not found
+
+  /api/v1/lsas/search/:
+    get:
+      tags:
+        - LSAs
+      summary: Search available LSAs
+      description: |
+        Returns active LSAs.
+
+        Optional skill filtering can be applied.
+        A start and end time can also be supplied to exclude LSAs
+        who already have a pending or confirmed booking.
+      parameters:
+        - name: skill
+          in: query
+          required: false
+          schema:
+            type: string
+          example: ADHD
+
+        - name: start_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: "2026-08-15T10:00:00+00:00"
+
+        - name: end_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: "2026-08-15T11:00:00+00:00"
+
+      responses:
+        '200':
+          description: List of available LSAs
+
+        '400':
+          description: Invalid search parameters
+
+  /api/v1/payments/webhook:
+    post:
+      tags:
+        - Payments
+      summary: Process payment webhook
+      description: |
+        Processes a payment result for a pending booking.
+
+        Payment events are idempotent. Sending the same event_id
+        more than once does not process the payment again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentWebhook'
+            examples:
+              success:
+                value:
+                  event_id: evt_success_001
+                  booking_id: 1
+                  status: success
+              failed:
+                value:
+                  event_id: evt_failed_001
+                  booking_id: 1
+                  status: failed
+
+      responses:
+        '200':
+          description: Payment processed or duplicate event
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    booking_id: 1
+                    status: confirmed
+                duplicate:
+                  value:
+                    booking_id: 1
+                    status: confirmed
+                    message: Event already processed
+
+        '400':
+          description: Invalid payment request
+
+        '404':
+          description: Booking not found
+
+        '409':
+          description: Booking is not pending
+
+components:
+
+  schemas:
+
+    CreateBookingRequest:
+      type: object
+      required:
+        - parent_id
+        - lsa_id
+        - start_time
+        - end_time
+      properties:
+        parent_id:
+          type: integer
+          example: 1
+
+        lsa_id:
+          type: integer
+          example: 1
+
+        start_time:
+          type: string
+          format: date-time
+          example: "2026-08-15T10:00:00+00:00"
+
+        end_time:
+          type: string
+          format: date-time
+          example: "2026-08-15T11:00:00+00:00"
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+
+        parent_id:
+          type: integer
+          example: 1
+
+        lsa_id:
+          type: integer
+          example: 1
+
+        start_time:
+          type: string
+          format: date-time
+          example: "2026-08-15T10:00:00+00:00"
+
+        end_time:
+          type: string
+          format: date-time
+          example: "2026-08-15T11:00:00+00:00"
+
+        status:
+          type: string
+          enum:
+            - pending
+            - confirmed
+            - cancelled
+            - completed
+            - failed
+          example: pending
+
+    PaymentWebhook:
+      type: object
+      required:
+        - event_id
+        - booking_id
+        - status
+      properties:
+        event_id:
+          type: string
+          example: evt_success_001
+
+        booking_id:
+          type: integer
+          example: 1
+
+        status:
+          type: string
+          enum:
+            - success
+            - failed
+          example: success
