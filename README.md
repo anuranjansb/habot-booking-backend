@@ -2,7 +2,7 @@
 
 A Flask backend prototype for the HABOT LSA Service Booking platform.
 
-The system connects parents with Learning Support Assistants (LSAs), manages booking requests, prevents double-bookings at the database level, and processes payment events through a webhook.
+The system connects parents with Learning Support Assistants (LSAs), manages booking requests, prevents double-bookings at the database level, and processes payment events through a webhook with mock third-party payment verification.
 
 ## Features
 
@@ -18,6 +18,7 @@ The system connects parents with Learning Support Assistants (LSAs), manages boo
 - Booking validation
 - Database-level overlapping booking prevention
 - Payment webhook processing
+- Mock third-party payment gateway integration
 - Idempotent payment event handling
 - Automated pytest test suite
 - GitHub Actions CI
@@ -33,6 +34,7 @@ The system connects parents with Learning Support Assistants (LSAs), manages boo
 - PostgreSQL
 - Pytest
 - Flask-JWT-Extended
+- Requests
 - Docker
 - GitHub Actions
 
@@ -61,7 +63,22 @@ SQLAlchemy ORM
 PostgreSQL
 ```
 
-### Project Structure
+External payment verification is isolated in a dedicated service:
+
+```text
+Payment Webhook
+      |
+      v
+Payment Service
+      |
+      v
+requests
+      |
+      v
+Mock Payment Gateway
+```
+
+## Project Structure
 
 ```text
 habot-booking-backend/
@@ -87,7 +104,8 @@ habot-booking-backend/
 │   │
 │   └── services/
 │       ├── __init__.py
-│       └── booking_service.py
+│       ├── booking_service.py
+│       └── payment_service.py
 │
 ├── migrations/
 │   └── versions/
@@ -109,6 +127,8 @@ habot-booking-backend/
 ├── requirements.txt
 └── run.py
 ```
+
+---
 
 # Database Design
 
@@ -194,7 +214,7 @@ Important fields include:
 - `end_time`
 - `status`
 
-Booking statuses include pending and confirmed states, with payment processing capable of transitioning the booking state.
+Booking statuses include pending, confirmed, and failed states. Payment processing can transition a pending booking to confirmed or failed.
 
 ## PaymentEvent
 
@@ -228,7 +248,7 @@ POST /api/v1/bookings/
 
 Creates a new booking request.
 
-### Request
+## Request
 
 ```json
 {
@@ -239,7 +259,7 @@ Creates a new booking request.
 }
 ```
 
-### Successful Response
+## Successful Response
 
 ```http
 201 Created
@@ -256,7 +276,7 @@ Creates a new booking request.
 }
 ```
 
-### Validation
+## Validation
 
 The endpoint validates:
 
@@ -298,13 +318,13 @@ GET /api/v1/lsas/search/
 
 Searches active LSAs based on skill and optional availability.
 
-### Example
+## Example
 
 ```http
 GET /api/v1/lsas/search/?skill=ADHD
 ```
 
-### Availability Search
+## Availability Search
 
 ```http
 GET /api/v1/lsas/search/?skill=ADHD&start_time=2026-08-15T10:30:00Z&end_time=2026-08-15T11:30:00Z
@@ -324,14 +344,62 @@ The availability filtering is performed through database queries rather than loa
 # Payment Webhook
 
 ```http
-POST /api/v1/payments/webhook/
+POST /api/v1/payments/webhook
 ```
 
-Receives payment events and updates booking state.
+Receives payment events and verifies them through a mock external payment gateway before updating the booking.
 
-Payment success and failure events transition the associated booking appropriately.
+The external integration is isolated in a dedicated payment service using Python's `requests` library.
 
-Payment event handling is designed to be idempotent so that processing the same event more than once does not incorrectly apply the state transition multiple times.
+The service includes:
+
+- Request timeout handling
+- `requests.RequestException` handling
+- Invalid response handling
+- Logging
+- Payment verification
+- Safe failure handling
+
+Payment events are processed idempotently. If the same `event_id` is received again, the previously processed event is returned without processing the payment again.
+
+## Payment Flow
+
+```text
+Payment Webhook
+      |
+      v
+Validate Event
+      |
+      v
+Check Idempotency
+      |
+      v
+Find Booking
+      |
+      v
+Mock Payment Gateway
+      |
+      v
+Payment Verification
+      |
+      v
+Update Booking
+      |
+      v
+Store PaymentEvent
+```
+
+## External Payment Integration
+
+The mock gateway URL is configured through:
+
+```env
+PAYMENT_GATEWAY_URL=https://mock-payment-gateway.example.com/verify
+```
+
+The application sends the payment event information to the configured gateway using an HTTP POST request with a five-second timeout.
+
+External request failures are caught and logged rather than exposing internal exceptions to API clients.
 
 ---
 
@@ -423,7 +491,7 @@ Example:
 
 JWT errors are also standardized.
 
-### Missing token
+## Missing Token
 
 ```json
 {
@@ -432,7 +500,7 @@ JWT errors are also standardized.
 }
 ```
 
-### Invalid token
+## Invalid Token
 
 ```json
 {
@@ -441,7 +509,7 @@ JWT errors are also standardized.
 }
 ```
 
-### Expired token
+## Expired Token
 
 ```json
 {
@@ -451,6 +519,8 @@ JWT errors are also standardized.
 ```
 
 Unexpected internal exceptions are logged by the application while returning a safe generic response to the client.
+
+External payment gateway failures return a safe API error rather than exposing the underlying exception.
 
 ---
 
@@ -480,7 +550,7 @@ migrations/versions/
 - Docker
 - Docker Compose
 
-## Start the application
+## Start the Application
 
 ```bash
 docker compose up --build
@@ -488,19 +558,19 @@ docker compose up --build
 
 The application runs inside the API container and PostgreSQL runs as a separate service.
 
-## Stop the application
+## Stop the Application
 
 ```bash
 docker compose down
 ```
 
-## Run migrations
+## Run Migrations
 
 ```bash
 docker compose exec api flask db upgrade
 ```
 
-## Run tests
+## Run Tests
 
 Tests can be executed in the configured Python environment with:
 
@@ -524,6 +594,8 @@ POSTGRES_PORT=5432
 POSTGRES_DB=habot_booking
 
 JWT_SECRET_KEY=change-this-secret-key
+
+PAYMENT_GATEWAY_URL=https://mock-payment-gateway.example.com/verify
 ```
 
 Do not commit production secrets or the real `.env` file to version control.
@@ -553,6 +625,10 @@ The test suite covers:
 - Payment success
 - Payment failure
 - Payment idempotency
+- Mock payment gateway integration
+- Payment gateway failure handling
+- Payment verification failure
+- Invalid payment gateway response handling
 - Error handling
 - HTTP error responses
 - JWT error responses
@@ -560,7 +636,7 @@ The test suite covers:
 Current test status:
 
 ```text
-58 passed
+61 passed
 0 warnings
 ```
 
@@ -644,6 +720,8 @@ Database
 
 Routes handle HTTP concerns while business logic is separated into services where appropriate.
 
+External integrations are also isolated in service modules to keep third-party communication separate from HTTP and database logic.
+
 ## Why PostgreSQL?
 
 PostgreSQL provides the relational integrity and advanced range/indexing capabilities required for reliable booking conflict prevention.
@@ -657,6 +735,20 @@ Application checks alone can suffer from race conditions when multiple requests 
 The database constraint provides a final integrity boundary.
 
 This follows the Poka-Yoke principle described in the project requirements: the system should prevent mistakes through design rather than relying on human memory.
+
+## Why Isolate the Payment Gateway?
+
+The external payment integration is isolated in `payment_service.py`.
+
+This provides:
+
+- Separation of concerns
+- Easier testing
+- Centralized exception handling
+- Centralized logging
+- Easier replacement of the mock gateway with a real provider
+
+The integration is tested using mocked HTTP requests, so the automated test suite does not depend on an external network service.
 
 ---
 
@@ -673,6 +765,7 @@ Potential production enhancements include:
 - Observability and metrics
 - Background processing for external payment events
 - Expanded API schema validation
+- Replacement of the mock payment gateway with a real payment provider
 
 These are intentionally outside the core prototype scope.
 
@@ -692,6 +785,9 @@ The backend prototype currently includes:
 - Database-level double-booking prevention
 - LSA availability search
 - Payment webhook processing
+- Mock third-party payment gateway integration
+- Payment gateway exception handling and logging
+- Idempotent payment event processing
 - Automated tests
 - Docker support
 - Database migrations
@@ -701,7 +797,7 @@ The backend prototype currently includes:
 Test status:
 
 ```text
-58 passed
+61 passed
 0 warnings
 ```
 
@@ -712,3 +808,5 @@ Test status:
 **Anuranjan SB**
 
 Python Backend Developer Candidate
+
+```
