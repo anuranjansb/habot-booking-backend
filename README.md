@@ -808,5 +808,3 @@ Test status:
 **Anuranjan SB**
 
 Python Backend Developer Candidate
-
-```
